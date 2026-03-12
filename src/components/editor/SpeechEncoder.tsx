@@ -17,6 +17,7 @@ const VISUAL_AXIS_MAP: Record<string, EncodingPropName> = {
 };
 
 // Maps spoken words to audio property names
+// Only uses valid AudioPropName values: pitch, duration, volume
 const AUDIO_PROP_MAP: Record<string, EncodingPropName> = {
   'pitch': 'pitch',
   'note': 'pitch',
@@ -37,6 +38,9 @@ export function SpeechEncoder() {
 
   // statusMessage shows feedback below the button after you speak
   const [statusMessage, setStatusMessage] = createSignal('');
+
+  // selectedAccent stores the chosen English accent language code
+  const [selectedAccent, setSelectedAccent] = createSignal('en-US');
 
   // Gets the name of the first visual unit (e.g. "vis_unit_0")
   const getFirstVisualUnit = () => spec.visual.units[0]?.name;
@@ -59,7 +63,7 @@ export function SpeechEncoder() {
       return { type: 'addVisualUnit' };
     }
 
-    // --- Command: "remove visual unit" or "remove unit <name>" ---
+    // --- Command: "remove visual unit" or "remove visual unit <name>" ---
     if (lower.includes('remove visual unit') || lower.includes('delete visual unit')) {
       return { type: 'removeVisualUnit', unitName: undefined };
     }
@@ -95,8 +99,7 @@ export function SpeechEncoder() {
       return { type: 'changeMark', mark: markMatch[1].trim() };
     }
 
-    // --- Command: "encode price as pitch" (audio encoding) ---
-    // We check audio first because some audio props like "rate" could be confused
+    // --- Command: "encode price as pitch" or "encode date as x" ---
     const encodePatterns = [
       /(?:encode|map|set|assign)\s+(.+?)\s+(?:as|to|on|for)\s+(.+)/,
       /(.+?)\s+(?:as|to|on)\s+(?:the\s+)?(.+?)\s+(?:axis|field|channel|property)?$/,
@@ -108,23 +111,23 @@ export function SpeechEncoder() {
         const spokenField = match[1].trim(); // e.g. "price"
         const spokenProp = match[2].trim();  // e.g. "pitch" or "x"
 
-        // Find a matching field in the dataset (exact match first)
+        // Look for exact match in dataset fields first
         const matchedField = spec.fields.find(
           (f) => f.active && f.name.toLowerCase() === spokenField
         );
 
-        // Fuzzy match if no exact match (e.g. "pric" finds "price")
+        // Fall back to fuzzy match (e.g. "pric" finds "price")
         const fuzzyField = matchedField || spec.fields.find(
           (f) => f.active && f.name.toLowerCase().includes(spokenField)
         );
 
-        // Check if it's an audio property
+        // Check if spoken property is an audio property
         const audioProperty = AUDIO_PROP_MAP[spokenProp];
         if (fuzzyField && audioProperty) {
           return { type: 'encodeAudio', field: fuzzyField.name, property: audioProperty };
         }
 
-        // Check if it's a visual property
+        // Check if spoken property is a visual property
         const visualProperty = VISUAL_AXIS_MAP[spokenProp];
         if (fuzzyField && visualProperty) {
           return { type: 'encodeVisual', field: fuzzyField.name, property: visualProperty };
@@ -146,9 +149,9 @@ export function SpeechEncoder() {
     }
 
     const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false; // only give us the final result
-    recognition.maxAlternatives = 3;    // try up to 3 interpretations of what you said
+    recognition.lang = selectedAccent(); // use the chosen accent
+    recognition.interimResults = false;  // only give us the final result
+    recognition.maxAlternatives = 3;     // try up to 3 interpretations
 
     setListening(true);
     setStatusMessage('Listening...');
@@ -163,22 +166,20 @@ export function SpeechEncoder() {
         const command = parseCommand(transcript);
 
         if (command) {
-
-          // --- Add a visual unit ---
+          // Add a visual unit
           if (command.type === 'addVisualUnit') {
             specActions.addVisualUnit();
             setStatusMessage('Added a new visual unit');
             return;
           }
 
-          // --- Remove a visual unit ---
+          // Remove a visual unit
           if (command.type === 'removeVisualUnit') {
             const units = spec.visual.units;
             if (units.length <= 1) {
               setStatusMessage('Cannot remove the only visual unit');
               return;
             }
-            // Remove named unit, or the last one if no name given
             const target = command.unitName
               ? units.find((u) => u.name.toLowerCase().includes(command.unitName!))
               : units[units.length - 1];
@@ -191,21 +192,20 @@ export function SpeechEncoder() {
             return;
           }
 
-          // --- Add an audio unit ---
+          // Add an audio unit
           if (command.type === 'addAudioUnit') {
             specActions.addAudioUnit();
             setStatusMessage('Added a new audio unit');
             return;
           }
 
-          // --- Remove an audio unit ---
+          // Remove an audio unit
           if (command.type === 'removeAudioUnit') {
             const units = spec.audio.units;
             if (units.length <= 1) {
               setStatusMessage('Cannot remove the only audio unit');
               return;
             }
-            // Remove named unit, or the last one if no name given
             const target = command.unitName
               ? units.find((u) => u.name.toLowerCase().includes(command.unitName!))
               : units[units.length - 1];
@@ -218,7 +218,7 @@ export function SpeechEncoder() {
             return;
           }
 
-          // --- Change mark type (e.g. bar, line, point) ---
+          // Change mark type (e.g. bar, line, point)
           if (command.type === 'changeMark') {
             const unit = getFirstVisualUnit();
             if (!unit) {
@@ -230,7 +230,7 @@ export function SpeechEncoder() {
             return;
           }
 
-          // --- Encode a field to a visual axis ---
+          // Encode a field to a visual axis
           if (command.type === 'encodeVisual' && command.field && command.property) {
             const unit = getFirstVisualUnit();
             if (!unit) {
@@ -242,7 +242,7 @@ export function SpeechEncoder() {
             return;
           }
 
-          // --- Encode a field to an audio property ---
+          // Encode a field to an audio property
           if (command.type === 'encodeAudio' && command.field && command.property) {
             const unit = getFirstAudioUnit();
             if (!unit) {
@@ -256,8 +256,8 @@ export function SpeechEncoder() {
         }
       }
 
-      // If we get here, nothing matched
-      setStatusMessage(`Couldn't understand: "${event.results[0][0].transcript}". Try: "encode price as pitch"`);
+      // Nothing matched
+      setStatusMessage(`Couldn't understand: "${event.results[0][0].transcript}". Try: "encode price as x"`);
     };
 
     // This runs if something goes wrong with the mic
@@ -266,7 +266,7 @@ export function SpeechEncoder() {
       setListening(false);
     };
 
-    // This runs when the mic stops (whether successful or not)
+    // This runs when the mic stops
     recognition.onend = () => {
       setListening(false);
     };
@@ -274,6 +274,32 @@ export function SpeechEncoder() {
 
   return (
     <div style={{ display: 'flex', 'align-items': 'center', gap: '8px', margin: '4px 0' }}>
+
+      {/* Accent selector dropdown */}
+      <select
+        value={selectedAccent()}
+        onChange={(e) => setSelectedAccent(e.currentTarget.value)}
+        style={{
+          border: '1px solid #ccc',
+          background: 'white',
+          'border-radius': '4px',
+          padding: '2px 6px',
+          'font-size': '13px',
+          color: 'black',
+        }}
+      >
+        <option value="en-US">🇺🇸 US English</option>
+        <option value="en-GB">🇬🇧 British English</option>
+        <option value="en-AU">🇦🇺 Australian English</option>
+        <option value="en-IN">🇮🇳 Indian English</option>
+        <option value="en-ZA">🇿🇦 South African English</option>
+        <option value="en-NZ">🇳🇿 New Zealand English</option>
+        <option value="en-IE">🇮🇪 Irish English</option>
+        <option value="en-CA">🇨🇦 Canadian English</option>
+        <option value="en-SG">🇸🇬 Singapore English</option>
+      </select>
+
+      {/* Mic button */}
       <button
         onClick={startListening}
         disabled={listening()}
@@ -287,7 +313,7 @@ export function SpeechEncoder() {
           color: 'black',
         }}
       >
-        {listening() ? ' Listening...' : 'Mic'}
+        {listening() ? '🎤 Listening...' : '🎤 Mic'}
       </button>
 
       {/* Show status message after speaking */}
@@ -296,6 +322,7 @@ export function SpeechEncoder() {
           {statusMessage()}
         </span>
       )}
+
     </div>
   );
 }
